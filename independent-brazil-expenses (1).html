@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IB · Prestação de Contas</title>
+
+<!-- Firebase -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
+  import { getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyAIV9U__iJPHPjrVHupdVpadE4Pei1zAOA",
+    authDomain: "independent-brazil.firebaseapp.com",
+    projectId: "independent-brazil",
+    storageBucket: "independent-brazil.firebasestorage.app",
+    messagingSenderId: "3294487230",
+    appId: "1:3294487230:web:fedc93f7a1b4b66dbc34ef"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  // Expose globally
+  window._db = db;
+  window._fbModules = { collection, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, query, orderBy };
+
+  // Init admin user if not exists
+  async function ensureAdmin() {
+    try {
+      const ref = doc(db, 'users', 'u0');
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        await setDoc(ref, {
+          id: 'u0', name: 'Admin Financeiro',
+          email: 'financial@independentbrazil.com',
+          password: 'admin123', role: 'admin',
+          createdAt: new Date().toISOString()
+        });
+      }
+      window._firebaseReady = true;
+      document.dispatchEvent(new Event('firebaseReady'));
+    } catch(e) {
+      console.error('Firebase init error:', e);
+      window._firebaseReady = true;
+      document.dispatchEvent(new Event('firebaseReady'));
+    }
+  }
+  ensureAdmin();
+</script>
+
+<!-- EmailJS -->
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script>emailjs.init({ publicKey: '9A4MxQWrnZ3cwvxAg' });</script>
+
+<!-- Export libs -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --black: #0a0a0a; --white: #f5f5f0; --gray: #1a1a1a; --gray2: #2a2a2a;
+    --accent: #c8a84b; --accent2: #e8c96b; --text-dim: #888;
+    --danger: #e05555; --success: #4caf7d; --border: rgba(255,255,255,0.08);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'DM Sans',sans-serif; background:var(--black); color:var(--white); min-height:100vh; overflow-x:hidden; }
+
+  /* LOADER */
+  #loader {
+    position:fixed; inset:0; background:var(--black);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:9999;
+  }
+  .loader-logo { font-family:'Bebas Neue',sans-serif; font-size:80px; color:var(--white); letter-spacing:10px; animation:pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .loader-text { font-size:12px; letter-spacing:3px; color:var(--text-dim); text-transform:uppercase; margin-top:16px; }
+
+  /* LOGIN */
+  #loginScreen { min-height:100vh; display:none; align-items:center; justify-content:center; background:var(--black); position:relative; overflow:hidden; }
+  #loginScreen::before { content:'IB'; position:absolute; font-family:'Bebas Neue',sans-serif; font-size:clamp(200px,40vw,500px); color:rgba(255,255,255,0.03); letter-spacing:-10px; user-select:none; pointer-events:none; }
+  .login-box { background:var(--gray); border:1px solid var(--border); padding:48px 40px; width:100%; max-width:420px; position:relative; z-index:1; }
+  .login-logo { display:flex; align-items:center; gap:14px; margin-bottom:36px; }
+  .logo-mark { width:52px; height:52px; background:var(--white); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .logo-mark span { font-family:'Bebas Neue',sans-serif; font-size:22px; color:var(--black); letter-spacing:1px; }
+  .login-logo-text { display:flex; flex-direction:column; }
+  .login-logo-text strong { font-family:'Bebas Neue',sans-serif; font-size:20px; letter-spacing:3px; color:var(--white); }
+  .login-logo-text small { font-size:11px; color:var(--text-dim); letter-spacing:2px; text-transform:uppercase; }
+  .login-title { font-family:'Bebas Neue',sans-serif; font-size:28px; letter-spacing:2px; margin-bottom:6px; }
+  .login-sub { font-size:13px; color:var(--text-dim); margin-bottom:32px; }
+
+  /* FIELDS */
+  .field { margin-bottom:18px; }
+  .field label { display:block; font-size:11px; letter-spacing:2px; text-transform:uppercase; color:var(--text-dim); margin-bottom:8px; }
+  .field input, .field select, .field textarea {
+    width:100%; background:var(--black); border:1px solid var(--border);
+    color:var(--white); padding:12px 14px; font-family:'DM Sans',sans-serif;
+    font-size:14px; outline:none; transition:border-color .2s;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus { border-color:var(--accent); }
+  .field select option { background:var(--black); }
+  .field textarea { resize:vertical; min-height:80px; }
+
+  /* BUTTONS */
+  .btn { display:inline-flex; align-items:center; gap:8px; padding:13px 22px; font-family:'DM Sans',sans-serif; font-size:13px; font-weight:600; letter-spacing:1px; text-transform:uppercase; cursor:pointer; border:none; transition:all .2s; }
+  .btn-primary { background:var(--white); color:var(--black); }
+  .btn-primary:hover { background:var(--accent2); }
+  .btn-gold { background:var(--accent); color:var(--black); }
+  .btn-gold:hover { background:var(--accent2); }
+  .btn-outline { background:transparent; border:1px solid var(--border); color:var(--white); }
+  .btn-outline:hover { border-color:var(--accent); color:var(--accent); }
+  .btn-full { width:100%; justify-content:center; }
+  .error-msg { color:var(--danger); font-size:12px; margin-top:10px; }
+
+  /* APP SHELL */
+  #app { display:none; min-height:100vh; flex-direction:column; }
+  header { background:var(--gray); border-bottom:1px solid var(--border); padding:0 24px; height:60px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; }
+  .header-left { display:flex; align-items:center; gap:14px; }
+  .header-logo { width:36px; height:36px; background:var(--white); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .header-logo span { font-family:'Bebas Neue',sans-serif; font-size:15px; color:var(--black); }
+  .header-brand { font-family:'Bebas Neue',sans-serif; font-size:16px; letter-spacing:3px; color:var(--white); }
+  .header-role { font-size:11px; color:var(--accent); letter-spacing:2px; text-transform:uppercase; }
+  .header-right { display:flex; align-items:center; gap:12px; }
+  .user-pill { display:flex; align-items:center; gap:8px; background:var(--black); border:1px solid var(--border); padding:6px 12px; font-size:12px; color:var(--text-dim); }
+  .user-pill strong { color:var(--white); font-size:13px; }
+  main { flex:1; padding:32px 24px; max-width:1100px; width:100%; margin:0 auto; }
+
+  /* CARDS */
+  .page-header { margin-bottom:32px; }
+  .page-title { font-family:'Bebas Neue',sans-serif; font-size:36px; letter-spacing:2px; }
+  .page-sub { font-size:13px; color:var(--text-dim); margin-top:4px; }
+  .card { background:var(--gray); border:1px solid var(--border); padding:32px; margin-bottom:24px; }
+  .card-title { font-family:'Bebas Neue',sans-serif; font-size:18px; letter-spacing:2px; margin-bottom:24px; padding-bottom:16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+  .card-title .dot { width:6px; height:6px; background:var(--accent); flex-shrink:0; }
+  .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  @media(max-width:600px) { .form-grid { grid-template-columns:1fr; } }
+  .form-grid .full { grid-column:1/-1; }
+
+  /* STATS */
+  .stats-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:16px; margin-bottom:24px; }
+  .stat-card { background:var(--gray); border:1px solid var(--border); padding:20px 24px; }
+  .stat-label { font-size:10px; letter-spacing:2px; text-transform:uppercase; color:var(--text-dim); margin-bottom:8px; }
+  .stat-value { font-family:'Bebas Neue',sans-serif; font-size:32px; color:var(--accent2); letter-spacing:1px; }
+  .stat-sub { font-size:11px; color:var(--text-dim); margin-top:4px; }
+
+  /* EXPENSE LIST */
+  .expense-list { display:flex; flex-direction:column; gap:12px; }
+  .expense-item { background:var(--black); border:1px solid var(--border); padding:16px 20px; display:grid; grid-template-columns:auto 1fr auto auto; align-items:center; gap:16px; transition:border-color .2s; }
+  .expense-item:hover { border-color:rgba(200,168,75,0.3); }
+  .cat-badge { padding:4px 10px; font-size:10px; font-weight:600; letter-spacing:2px; text-transform:uppercase; background:var(--gray2); color:var(--accent); white-space:nowrap; }
+  .exp-info strong { font-size:14px; font-weight:500; display:block; }
+  .exp-info small { font-size:12px; color:var(--text-dim); }
+  .exp-amount { font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:1px; color:var(--accent2); white-space:nowrap; }
+  .exp-date { font-size:11px; color:var(--text-dim); text-align:right; white-space:nowrap; }
+  .status-badge { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; font-size:10px; letter-spacing:1px; text-transform:uppercase; }
+  .status-pending { background:rgba(200,168,75,0.15); color:var(--accent); }
+  .status-approved { background:rgba(76,175,125,0.15); color:var(--success); }
+  .status-rejected { background:rgba(224,85,85,0.15); color:var(--danger); }
+
+  /* TABS */
+  .tabs { display:flex; gap:0; border-bottom:1px solid var(--border); margin-bottom:32px; }
+  .tab { padding:12px 24px; font-size:12px; font-weight:600; letter-spacing:2px; text-transform:uppercase; cursor:pointer; color:var(--text-dim); border-bottom:2px solid transparent; transition:all .2s; background:none; border-left:none; border-right:none; border-top:none; }
+  .tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+  .tab:hover:not(.active) { color:var(--white); }
+
+  /* FILTERS */
+  .filters { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:24px; align-items:center; }
+  .filters input, .filters select { background:var(--gray); border:1px solid var(--border); color:var(--white); padding:9px 14px; font-family:'DM Sans',sans-serif; font-size:13px; outline:none; transition:border-color .2s; }
+  .filters input:focus, .filters select:focus { border-color:var(--accent); }
+  .filters select option { background:var(--black); }
+
+  /* TABLE */
+  .admin-table-wrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; padding:10px 14px; font-size:10px; letter-spacing:2px; text-transform:uppercase; color:var(--text-dim); border-bottom:1px solid var(--border); white-space:nowrap; }
+  td { padding:12px 14px; font-size:13px; border-bottom:1px solid rgba(255,255,255,0.04); vertical-align:middle; }
+  tr:hover td { background:rgba(255,255,255,0.02); }
+  .trader-avatar { width:30px; height:30px; background:var(--accent); color:var(--black); display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; margin-right:8px; vertical-align:middle; flex-shrink:0; }
+
+  /* BIZ LINE */
+  .biz-section { margin-bottom:28px; }
+  .biz-section-title { font-family:'Bebas Neue',sans-serif; font-size:13px; letter-spacing:3px; color:var(--text-dim); margin-bottom:12px; }
+  .biz-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:10px; }
+  .biz-card { background:var(--black); border:1px solid var(--border); padding:18px 20px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  .biz-bar { width:4px; height:36px; flex-shrink:0; }
+  .biz-name { font-family:'Bebas Neue',sans-serif; font-size:16px; letter-spacing:2px; }
+  .biz-count { font-size:10px; color:var(--text-dim); }
+  .biz-amounts { display:flex; gap:20px; flex-wrap:wrap; }
+  .biz-amount-item { }
+  .biz-amount-label { font-size:10px; color:var(--text-dim); letter-spacing:1px; margin-bottom:2px; }
+  .biz-amount-val { font-family:'Bebas Neue',sans-serif; font-size:18px; color:var(--white); }
+
+  /* USERS */
+  .users-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:16px; }
+  .user-card { background:var(--black); border:1px solid var(--border); padding:20px; display:flex; align-items:center; gap:14px; }
+  .user-avatar-lg { width:44px; height:44px; background:var(--accent); color:var(--black); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:16px; flex-shrink:0; }
+  .user-info strong { font-size:14px; display:block; }
+  .user-info small { font-size:12px; color:var(--text-dim); display:block; }
+  .user-biz { font-size:11px; color:var(--accent); letter-spacing:1px; text-transform:uppercase; margin-top:2px; }
+
+  /* MODAL */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:999; align-items:center; justify-content:center; padding:16px; }
+  .modal-overlay.open { display:flex; }
+  .modal { background:var(--gray); border:1px solid var(--border); padding:36px; width:100%; max-width:480px; animation:slideUp .25s ease; }
+  @keyframes slideUp { from{transform:translateY(20px);opacity:0} to{transform:translateY(0);opacity:1} }
+  .modal-title { font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:2px; margin-bottom:24px; }
+  .modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:24px; flex-wrap:wrap; }
+
+  /* IMAGE UPLOAD */
+  .upload-area { border:2px dashed var(--border); padding:28px 16px; text-align:center; cursor:pointer; transition:border-color .2s; position:relative; background:var(--black); }
+  .upload-area:hover { border-color:var(--accent); }
+  .upload-area input[type=file] { position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; }
+  .upload-label { font-size:13px; color:var(--text-dim); }
+  .upload-label span { color:var(--accent); font-weight:600; }
+  .upload-label small { display:block; margin-top:4px; font-size:11px; }
+  .preview-grid { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
+  .preview-wrap { position:relative; }
+  .preview-thumb { width:80px; height:80px; object-fit:cover; border:1px solid var(--border); cursor:pointer; transition:border-color .2s; display:block; }
+  .preview-thumb:hover { border-color:var(--accent); }
+  .preview-remove { position:absolute; top:-6px; right:-6px; width:18px; height:18px; background:var(--danger); color:#fff; border:none; border-radius:50%; font-size:11px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1; }
+
+  /* LIGHTBOX */
+  .lightbox { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.95); z-index:9999; align-items:center; justify-content:center; }
+  .lightbox.open { display:flex; }
+  .lightbox img { max-width:90vw; max-height:88vh; object-fit:contain; }
+  .lightbox-close { position:fixed; top:16px; right:20px; font-size:28px; color:#fff; cursor:pointer; background:none; border:none; line-height:1; }
+
+  /* ACTION BUTTONS */
+  .action-btn { padding:5px 10px; font-size:10px; letter-spacing:1px; text-transform:uppercase; font-weight:600; cursor:pointer; border:1px solid; background:transparent; transition:all .2s; font-family:'DM Sans',sans-serif; }
+  .action-approve { border-color:var(--success); color:var(--success); }
+  .action-approve:hover { background:var(--success); color:var(--black); }
+  .action-reject { border-color:var(--danger); color:var(--danger); }
+  .action-reject:hover { background:var(--danger); color:var(--white); }
+
+  /* TOAST */
+  .toast { position:fixed; bottom:24px; right:24px; background:var(--gray); border-left:3px solid var(--success); padding:14px 20px; font-size:13px; z-index:9999; animation:slideUp .3s ease; max-width:320px; display:none; }
+  .toast.error { border-left-color:var(--danger); }
+
+  /* EMPTY */
+  .empty-state { text-align:center; padding:60px 20px; color:var(--text-dim); }
+  .empty-state .big { font-family:'Bebas Neue',sans-serif; font-size:48px; color:rgba(255,255,255,0.05); }
+  .empty-state p { font-size:14px; margin-top:8px; }
+
+  /* SPINNER */
+  .spinner { display:inline-block; width:16px; height:16px; border:2px solid rgba(255,255,255,0.2); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to{transform:rotate(360deg)} }
+
+  @media(max-width:700px) {
+    main { padding:20px 14px; }
+    .card { padding:20px; }
+    .expense-item { grid-template-columns:1fr 1fr; }
+    .header-brand { display:none; }
+    .stats-row { grid-template-columns:1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- LOADER -->
+<div id="loader">
+  <div class="loader-logo">IB</div>
+  <div class="loader-text">Conectando ao sistema...</div>
+</div>
+
+<!-- LOGIN -->
+<div id="loginScreen">
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="logo-mark"><span>IB</span></div>
+      <div class="login-logo-text">
+        <strong>INDEPENDENT BRAZIL</strong>
+        <small>Comércio Exterior</small>
+      </div>
+    </div>
+    <div class="login-title">Acesso ao Sistema</div>
+    <p class="login-sub">Prestação de Contas · Traders & Financeiro</p>
+    <div class="field">
+      <label>E-mail</label>
+      <input type="email" id="loginUser" placeholder="seu@email.com" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>Senha</label>
+      <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <div id="loginError" class="error-msg"></div>
+    <div style="margin-top:24px;">
+      <button class="btn btn-primary btn-full" id="loginBtn" onclick="doLogin()">Entrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <header>
+    <div class="header-left">
+      <div class="header-logo"><span>IB</span></div>
+      <div>
+        <div class="header-brand">INDEPENDENT BRAZIL</div>
+        <div class="header-role" id="headerRole"></div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="user-pill"><strong id="headerUser"></strong></div>
+      <button class="btn btn-outline" style="padding:8px 14px;font-size:11px;" onclick="logout()">Sair</button>
+    </div>
+  </header>
+  <main id="mainContent"></main>
+</div>
+
+<!-- MODAL -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div class="modal-title" id="modalTitle"></div>
+    <div id="modalBody"></div>
+    <div class="modal-actions" id="modalActions"></div>
+  </div>
+</div>
+
+<!-- LIGHTBOX -->
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" onclick="document.getElementById('lightbox').classList.remove('open')">&#x2715;</button>
+  <img id="lightboxImg" src="" alt="">
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toastEl"></div>
+
+<script>
+// ═══════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════
+const BIZ_LINES = ['Import','Feed Meal','Meat','Commodities','Seafood'];
+const BIZ_COLORS = { 'Import':'#4a9eff','Feed Meal':'#c8a84b','Meat':'#e05555','Commodities':'#4caf7d','Seafood':'#a78bfa' };
+const CURR_SYMBOL = { BRL:'R$', USD:'US$', EUR:'€' };
+const STATUS_LABEL = { pending:'Pendente', approved:'Aprovado', rejected:'Recusado' };
+const STATUS_CLASS = { pending:'status-pending', approved:'status-approved', rejected:'status-rejected' };
+
+let state = { currentUser: null };
+let pendingImages = [];
+let allExpenses = [];
+let adminTab = 'expenses';
+
+// ═══════════════════════════════════════════
+// FIREBASE HELPERS
+// ═══════════════════════════════════════════
+function db() { return window._db; }
+function fb() { return window._fbModules; }
+
+async function fbGetAll(collName) {
+  const { collection, getDocs, query, orderBy } = fb();
+  const q = query(collection(db(), collName), orderBy('createdAt','desc'));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => d.data());
+}
+
+async function fbGet(collName, id) {
+  const { doc, getDoc } = fb();
+  const snap = await getDoc(doc(db(), collName, id));
+  return snap.exists() ? snap.data() : null;
+}
+
+async function fbSet(collName, id, data) {
+  const { doc, setDoc } = fb();
+  await setDoc(doc(db(), collName, id), data);
+}
+
+async function fbUpdate(collName, id, data) {
+  const { doc, updateDoc } = fb();
+  await updateDoc(doc(db(), collName, id), data);
+}
+
+async function fbDelete(collName, id) {
+  const { doc, deleteDoc } = fb();
+  await deleteDoc(doc(db(), collName, id));
+}
+
+// ═══════════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════════
+document.addEventListener('firebaseReady', () => {
+  document.getElementById('loader').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+});
+document.addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+document.getElementById('lightbox').addEventListener('click', e => { if(e.target===e.currentTarget) e.currentTarget.classList.remove('open'); });
+document.getElementById('modalOverlay').addEventListener('click', e => { if(e.target===e.currentTarget) closeModal(); });
+
+// Fallback if Firebase takes too long
+setTimeout(() => {
+  if (!window._firebaseReady) {
+    document.getElementById('loader').style.display = 'none';
+    document.getElementById('loginScreen').style.display = 'flex';
+  }
+}, 5000);
+
+// ═══════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════
+async function doLogin() {
+  const email = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  const btn = document.getElementById('loginBtn');
+  btn.innerHTML = '<span class="spinner"></span>';
+  btn.disabled = true;
+
+  try {
+    const users = await fbGetAll('users');
+    const user = users.find(u => u.email === email && u.password === pass);
+    if (!user) {
+      document.getElementById('loginError').textContent = 'E-mail ou senha incorretos.';
+      btn.innerHTML = 'Entrar'; btn.disabled = false; return;
+    }
+    state.currentUser = user;
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    document.getElementById('headerUser').textContent = user.name;
+    document.getElementById('headerRole').textContent = user.role === 'admin' ? 'Financeiro · Admin' : `Trader · ${user.businessLine||''}`;
+    if (user.role === 'admin') renderAdmin();
+    else renderTrader();
+  } catch(e) {
+    document.getElementById('loginError').textContent = 'Erro de conexão. Tente novamente.';
+  }
+  btn.innerHTML = 'Entrar'; btn.disabled = false;
+}
+
+function logout() {
+  state.currentUser = null;
+  pendingImages = [];
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('loginUser').value = '';
+  document.getElementById('loginPass').value = '';
+  document.getElementById('loginError').textContent = '';
+}
+
+// ═══════════════════════════════════════════
+// TRADER VIEW
+// ═══════════════════════════════════════════
+async function renderTrader() {
+  document.getElementById('mainContent').innerHTML = '<div style="text-align:center;padding:60px;"><span class="spinner" style="width:32px;height:32px;border-width:3px;"></span></div>';
+  try {
+    const all = await fbGetAll('expenses');
+    const mine = all.filter(e => e.userId === state.currentUser.id);
+    allExpenses = mine;
+    renderTraderHTML(mine);
+  } catch(e) {
+    toast('Erro ao carregar dados.', true);
+  }
+}
+
+function renderTraderHTML(mine) {
+  const html = `
+    <div class="page-header">
+      <div class="page-title">Olá, ${state.currentUser.name.split(' ')[0]}</div>
+      <div class="page-sub">Gerencie suas prestações de contas · ${state.currentUser.businessLine || ''}</div>
+    </div>
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-label">Total enviado</div><div class="stat-value">${mine.length}</div><div class="stat-sub">prestações</div></div>
+      <div class="stat-card"><div class="stat-label">Pendentes</div><div class="stat-value">${mine.filter(e=>e.status==='pending').length}</div><div class="stat-sub">aguardando aprovação</div></div>
+      <div class="stat-card"><div class="stat-label">Aprovadas</div><div class="stat-value">${mine.filter(e=>e.status==='approved').length}</div><div class="stat-sub">reembolsos</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><div class="dot"></div> Nova Prestação de Contas</div>
+      <div class="form-grid">
+        <div class="field"><label>Evento *</label><input type="text" id="fEvento" placeholder="Ex: Reunião Porto / Fenavem 2024"></div>
+        <div class="field"><label>Data *</label><input type="date" id="fData"></div>
+        <div class="field"><label>Categoria *</label>
+          <select id="fCategoria">
+            <option value="">— Selecione —</option>
+            <option>Viagem</option><option>Aluguel de Carro</option>
+            <option>Alimentação</option><option>Brinde</option><option>Outros</option>
+          </select>
+        </div>
+        <div class="field" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div><label>Valor *</label><input type="number" id="fValor" placeholder="0,00" step="0.01" min="0"></div>
+          <div><label>Moeda *</label>
+            <select id="fMoeda"><option value="BRL">R$ Real</option><option value="USD">$ USD</option><option value="EUR">€ Euro</option></select>
+          </div>
+        </div>
+        <div class="field full"><label>Descrição</label><input type="text" id="fDescricao" placeholder="Detalhes adicionais..."></div>
+        <div class="field full">
+          <label>Comprovantes / Imagens</label>
+          <div class="upload-area">
+            <input type="file" id="fImages" accept="image/*" multiple onchange="handleImageUpload(event)">
+            <div class="upload-label"><span>Clique ou arraste</span> para adicionar imagens<small>JPG, PNG, WEBP · múltiplos arquivos aceitos</small></div>
+          </div>
+          <div class="preview-grid" id="previewGrid"></div>
+        </div>
+      </div>
+      <div style="margin-top:24px;">
+        <button class="btn btn-gold" id="submitBtn" onclick="submitExpense()">Enviar Prestação</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><div class="dot"></div> Minhas Prestações</div>
+      ${mine.length === 0 ? `<div class="empty-state"><div class="big">IB</div><p>Nenhuma prestação enviada ainda.</p></div>`
+      : `<div class="expense-list">${mine.map(expenseCard).join('')}</div>`}
+    </div>`;
+  document.getElementById('mainContent').innerHTML = html;
+  document.getElementById('fData').valueAsDate = new Date();
+}
+
+function expenseCard(e) {
+  return `
+    <div class="expense-item">
+      <span class="cat-badge">${e.category}</span>
+      <div class="exp-info">
+        <strong>${e.event}</strong>
+        <small>${e.description || '—'}</small>
+        ${e.images && e.images.length ? `<div style="display:flex;gap:6px;margin-top:6px;">${e.images.map(img=>`<img src="${img.dataUrl}" onclick="openLightbox('${img.dataUrl}')" style="width:36px;height:36px;object-fit:cover;border:1px solid rgba(255,255,255,0.1);cursor:pointer;">`).join('')}</div>` : ''}
+      </div>
+      <div style="text-align:right">
+        <div class="exp-amount">${CURR_SYMBOL[e.currency]} ${Number(e.amount).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
+        <span class="status-badge ${STATUS_CLASS[e.status]}">${STATUS_LABEL[e.status]}</span>
+      </div>
+      <div class="exp-date">
+        ${new Date(e.date+'T12:00:00').toLocaleDateString('pt-BR')}<br>
+        <span style="color:#555;font-size:10px;">incl. ${new Date(e.createdAt).toLocaleDateString('pt-BR')}</span>
+      </div>
+    </div>`;
+}
+
+async function submitExpense() {
+  const evento = document.getElementById('fEvento').value.trim();
+  const data = document.getElementById('fData').value;
+  const cat = document.getElementById('fCategoria').value;
+  const valor = parseFloat(document.getElementById('fValor').value);
+  const moeda = document.getElementById('fMoeda').value;
+  const desc = document.getElementById('fDescricao').value.trim();
+  if (!evento || !data || !cat || isNaN(valor) || valor <= 0) { toast('Preencha todos os campos obrigatórios.', true); return; }
+
+  const btn = document.getElementById('submitBtn');
+  btn.innerHTML = '<span class="spinner"></span> Enviando...';
+  btn.disabled = true;
+
+  try {
+    const id = 'exp_' + Date.now();
+    const exp = {
+      id, userId: state.currentUser.id, userName: state.currentUser.name,
+      businessLine: state.currentUser.businessLine || '',
+      event: evento, date: data, category: cat,
+      amount: valor, currency: moeda, description: desc,
+      images: pendingImages.map(i => ({ name: i.name, dataUrl: i.dataUrl })),
+      status: 'pending',
+      createdAt: new Date().toISOString()
+    };
+    await fbSet('expenses', id, exp);
+
+    // Send email
+    await sendEmail(exp);
+
+    pendingImages = [];
+    toast('Prestação enviada com sucesso! Email enviado ao financeiro.');
+    renderTrader();
+  } catch(e) {
+    toast('Erro ao enviar. Tente novamente.', true);
+    console.error(e);
+  }
+  btn.innerHTML = 'Enviar Prestação'; btn.disabled = false;
+}
+
+// ═══════════════════════════════════════════
+// EMAIL
+// ═══════════════════════════════════════════
+async function sendEmail(exp) {
+  try {
+    await emailjs.send('service_7ojw3be', 'template_5r3es1d', {
+      trader_name: exp.userName,
+      business_line: exp.businessLine || '—',
+      event: exp.event,
+      category: exp.category,
+      date: new Date(exp.date+'T12:00:00').toLocaleDateString('pt-BR'),
+      amount: `${CURR_SYMBOL[exp.currency]} ${Number(exp.amount).toLocaleString('pt-BR',{minimumFractionDigits:2})}`,
+      description: exp.description || '—',
+      created_at: new Date(exp.createdAt).toLocaleString('pt-BR'),
+      image_count: exp.images ? exp.images.length : 0,
+      name: exp.userName,
+      title: exp.event,
+      message: `Trader: ${exp.userName}\nLinha: ${exp.businessLine}\nEvento: ${exp.event}\nCategoria: ${exp.category}\nValor: ${CURR_SYMBOL[exp.currency]} ${Number(exp.amount).toLocaleString('pt-BR',{minimumFractionDigits:2})}\nDescrição: ${exp.description||'—'}`
+    });
+    console.log('Email enviado!');
+  } catch(e) {
+    console.warn('Email error:', e);
+  }
+}
+
+// ═══════════════════════════════════════════
+// IMAGE UPLOAD
+// ═══════════════════════════════════════════
+function handleImageUpload(event) {
+  Array.from(event.target.files).forEach(file => {
+    const reader = new FileReader();
+    reader.onload = e => { pendingImages.push({ name: file.name, dataUrl: e.target.result }); renderPreviews(); };
+    reader.readAsDataURL(file);
+  });
+  event.target.value = '';
+}
+function renderPreviews() {
+  const grid = document.getElementById('previewGrid');
+  if (!grid) return;
+  grid.innerHTML = pendingImages.map((img,i) => `
+    <div class="preview-wrap">
+      <img class="preview-thumb" src="${img.dataUrl}" title="${img.name}" onclick="openLightbox('${img.dataUrl}')">
+      <button class="preview-remove" onclick="removeImage(${i})">&#x2715;</button>
+    </div>`).join('');
+}
+function removeImage(idx) { pendingImages.splice(idx,1); renderPreviews(); }
+function openLightbox(src) { document.getElementById('lightboxImg').src=src; document.getElementById('lightbox').classList.add('open'); }
+
+// ═══════════════════════════════════════════
+// ADMIN VIEW
+// ═══════════════════════════════════════════
+async function renderAdmin() {
+  document.getElementById('mainContent').innerHTML = '<div style="text-align:center;padding:60px;"><span class="spinner" style="width:32px;height:32px;border-width:3px;"></span></div>';
+  try {
+    allExpenses = await fbGetAll('expenses');
+    renderAdminHTML(allExpenses);
+  } catch(e) { toast('Erro ao carregar dados.', true); }
+}
+
+function renderAdminHTML(expenses) {
+  const totalBRL = expenses.filter(e=>e.currency==='BRL').reduce((s,e)=>s+e.amount,0);
+  const totalUSD = expenses.filter(e=>e.currency==='USD').reduce((s,e)=>s+e.amount,0);
+  const totalEUR = expenses.filter(e=>e.currency==='EUR').reduce((s,e)=>s+e.amount,0);
+
+  const html = `
+    <div class="page-header">
+      <div class="page-title">Painel Financeiro</div>
+      <div class="page-sub">Independent Brazil · Gestão de Despesas</div>
+    </div>
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-label">Total BRL</div><div class="stat-value">R$ ${totalBRL.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</div><div class="stat-sub">${expenses.filter(e=>e.currency==='BRL').length} lançamentos</div></div>
+      <div class="stat-card"><div class="stat-label">Total USD</div><div class="stat-value">$ ${totalUSD.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</div><div class="stat-sub">${expenses.filter(e=>e.currency==='USD').length} lançamentos</div></div>
+      <div class="stat-card"><div class="stat-label">Total EUR</div><div class="stat-value">€ ${totalEUR.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</div><div class="stat-sub">${expenses.filter(e=>e.currency==='EUR').length} lançamentos</div></div>
+      <div class="stat-card"><div class="stat-label">Pendentes</div><div class="stat-value">${expenses.filter(e=>e.status==='pending').length}</div><div class="stat-sub">aguardando revisão</div></div>
+    </div>
+    ${renderBizLineStats(expenses)}
+    <div class="tabs">
+      <button class="tab ${adminTab==='expenses'?'active':''}" onclick="switchTab('expenses',event)">Prestações</button>
+      <button class="tab ${adminTab==='users'?'active':''}" onclick="switchTab('users',event)">Traders</button>
+    </div>
+    <div id="tabContent"></div>`;
+  document.getElementById('mainContent').innerHTML = html;
+  renderTab();
+}
+
+function renderBizLineStats(expenses) {
+  const rows = BIZ_LINES.map(line => {
+    const exps = expenses.filter(e => e.businessLine === line);
+    const brl = exps.filter(e=>e.currency==='BRL').reduce((s,e)=>s+e.amount,0);
+    const usd = exps.filter(e=>e.currency==='USD').reduce((s,e)=>s+e.amount,0);
+    const eur = exps.filter(e=>e.currency==='EUR').reduce((s,e)=>s+e.amount,0);
+    const color = BIZ_COLORS[line]||'#888';
+    return `<div class="biz-card">
+      <div class="biz-bar" style="background:${color};"></div>
+      <div><div class="biz-name" style="color:${color};">${line}</div><div class="biz-count">${exps.length} lançamento${exps.length!==1?'s':''}</div></div>
+      <div class="biz-amounts">
+        <div class="biz-amount-item"><div class="biz-amount-label">BRL</div><div class="biz-amount-val">R$ ${brl.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</div></div>
+        <div class="biz-amount-item"><div class="biz-amount-label">USD</div><div class="biz-amount-val">$ ${usd.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</div></div>
+        <div class="biz-amount-item"><div class="biz-amount-label">EUR</div><div class="biz-amount-val">€ ${eur.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</div></div>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="biz-section"><div class="biz-section-title">Total por Linha de Negócio</div><div class="biz-grid">${rows}</div></div>`;
+}
+
+function switchTab(tab, event) {
+  adminTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  if (event) event.target.classList.add('active');
+  renderTab();
+}
+
+function renderTab() {
+  if (adminTab === 'expenses') renderExpensesTab();
+  else renderUsersTab();
+}
+
+let filteredExpenses = [];
+
+function renderExpensesTab() {
+  document.getElementById('tabContent').innerHTML = `
+    <div class="card">
+      <div class="card-title"><div class="dot"></div> Todas as Prestações</div>
+      <div class="filters">
+        <input type="text" id="filterText" placeholder="Buscar trader, evento..." oninput="filterTable()" style="min-width:200px;">
+        <select id="filterBiz" onchange="filterTable()">
+          <option value="">Todas as linhas</option>
+          ${BIZ_LINES.map(l=>`<option>${l}</option>`).join('')}
+        </select>
+        <select id="filterCat" onchange="filterTable()">
+          <option value="">Todas categorias</option>
+          <option>Viagem</option><option>Aluguel de Carro</option>
+          <option>Alimentação</option><option>Brinde</option><option>Outros</option>
+        </select>
+        <select id="filterStatus" onchange="filterTable()">
+          <option value="">Todos status</option>
+          <option value="pending">Pendente</option>
+          <option value="approved">Aprovado</option>
+          <option value="rejected">Recusado</option>
+        </select>
+        <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;">
+          <button class="btn btn-outline" onclick="exportExcel()">⬇ Excel</button>
+          <button class="btn btn-outline" onclick="exportPDF()">⬇ PDF</button>
+        </div>
+      </div>
+      <div class="admin-table-wrap">
+        <table>
+          <thead><tr>
+            <th>Trader</th><th>Linha</th><th>Evento</th>
+            <th>Categoria</th><th>Data</th><th>Valor</th><th>Status</th><th>Ações</th>
+          </tr></thead>
+          <tbody id="expTableBody"></tbody>
+        </table>
+      </div>
+    </div>`;
+  filterTable();
+}
+
+function filterTable() {
+  const txt = (document.getElementById('filterText')?.value||'').toLowerCase();
+  const biz = document.getElementById('filterBiz')?.value||'';
+  const cat = document.getElementById('filterCat')?.value||'';
+  const status = document.getElementById('filterStatus')?.value||'';
+
+  filteredExpenses = allExpenses.filter(e => {
+    return (!txt || e.userName.toLowerCase().includes(txt) || e.event.toLowerCase().includes(txt) || (e.description||'').toLowerCase().includes(txt))
+        && (!biz || e.businessLine === biz)
+        && (!cat || e.category === cat)
+        && (!status || e.status === status);
+  });
+
+  const tbody = document.getElementById('expTableBody');
+  if (!tbody) return;
+  if (!filteredExpenses.length) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:40px;">Nenhuma prestação encontrada.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filteredExpenses.map(e => {
+    const color = BIZ_COLORS[e.businessLine]||'var(--text-dim)';
+    const initials = e.userName.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase();
+    return `<tr>
+      <td><div style="display:flex;align-items:center;gap:8px;"><div class="trader-avatar">${initials}</div>${e.userName}</div></td>
+      <td><span style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:${color};">${e.businessLine||'—'}</span></td>
+      <td><strong>${e.event}</strong><br><small style="color:var(--text-dim)">${e.description||''}</small>
+        ${e.images&&e.images.length?`<div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;">${e.images.map(img=>`<img src="${img.dataUrl}" onclick="openLightbox('${img.dataUrl}')" style="width:32px;height:32px;object-fit:cover;border:1px solid rgba(255,255,255,0.1);cursor:pointer;">`).join('')}</div>`:''}
+      </td>
+      <td><span class="cat-badge">${e.category}</span></td>
+      <td style="color:var(--text-dim);font-size:12px;">${new Date(e.date+'T12:00:00').toLocaleDateString('pt-BR')}<br><span style="font-size:10px;">incl. ${new Date(e.createdAt).toLocaleDateString('pt-BR')}</span></td>
+      <td style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--accent2);">${CURR_SYMBOL[e.currency]} ${Number(e.amount).toLocaleString('pt-BR',{minimumFractionDigits:2})}</td>
+      <td><span class="status-badge ${STATUS_CLASS[e.status]}">${STATUS_LABEL[e.status]}</span></td>
+      <td>${e.status==='pending'?`
+        <button class="action-btn action-approve" onclick="changeStatus('${e.id}','approved')">Aprovar</button>
+        <button class="action-btn action-reject" style="margin-left:6px" onclick="changeStatus('${e.id}','rejected')">Recusar</button>
+      `:`<span style="color:var(--text-dim);font-size:11px;">—</span>`}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function changeStatus(id, status) {
+  try {
+    await fbUpdate('expenses', id, { status });
+    const idx = allExpenses.findIndex(e => e.id === id);
+    if (idx >= 0) allExpenses[idx].status = status;
+    toast(status === 'approved' ? 'Prestação aprovada!' : 'Prestação recusada.');
+    filterTable();
+    renderAdminHTML(allExpenses);
+  } catch(e) { toast('Erro ao atualizar.', true); }
+}
+
+// ═══════════════════════════════════════════
+// USERS TAB
+// ═══════════════════════════════════════════
+async function renderUsersTab() {
+  document.getElementById('tabContent').innerHTML = '<div style="text-align:center;padding:40px;"><span class="spinner" style="width:24px;height:24px;border-width:3px;"></span></div>';
+  try {
+    const all = await fbGetAll('users');
+    const traders = all.filter(u => u.role === 'trader');
+    const html = `
+      <div class="card">
+        <div class="card-title"><div class="dot"></div> Traders Cadastrados</div>
+        <div style="margin-bottom:24px;"><button class="btn btn-gold" onclick="openNewUserModal()">+ Novo Trader</button></div>
+        ${traders.length === 0 ? `<div class="empty-state"><div class="big">0</div><p>Nenhum trader ainda. Clique em "+ Novo Trader".</p></div>` : `
+        <div class="users-grid">
+          ${traders.map(u => `
+            <div class="user-card">
+              <div class="user-avatar-lg">${u.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()}</div>
+              <div class="user-info">
+                <strong>${u.name}</strong>
+                <small>${u.email}</small>
+                <div class="user-biz">${u.businessLine||''}</div>
+                <div style="margin-top:8px;"><button class="action-btn action-reject" onclick="deleteUser('${u.id}')">Remover</button></div>
+              </div>
+            </div>`).join('')}
+        </div>`}
+      </div>`;
+    document.getElementById('tabContent').innerHTML = html;
+  } catch(e) { toast('Erro ao carregar traders.', true); }
+}
+
+function openNewUserModal() {
+  document.getElementById('modalTitle').textContent = 'Cadastrar Novo Trader';
+  document.getElementById('modalBody').innerHTML = `
+    <div class="field"><label>Nome Completo *</label><input type="text" id="newName" placeholder="João Silva"></div>
+    <div class="field"><label>E-mail *</label><input type="email" id="newEmail" placeholder="joao@independentbrazil.com"></div>
+    <div class="field"><label>Senha *</label><input type="password" id="newPass" placeholder="Mínimo 6 caracteres"></div>
+    <div class="field"><label>Linha de Negócio *</label>
+      <select id="newBizLine">
+        <option value="">— Selecione —</option>
+        ${BIZ_LINES.map(l=>`<option>${l}</option>`).join('')}
+      </select>
+    </div>
+    <div id="newUserError" class="error-msg"></div>`;
+  document.getElementById('modalActions').innerHTML = `
+    <button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+    <button class="btn btn-gold" onclick="createUser()">Cadastrar</button>`;
+  document.getElementById('modalOverlay').classList.add('open');
+}
+
+async function createUser() {
+  const name = document.getElementById('newName').value.trim();
+  const email = document.getElementById('newEmail').value.trim();
+  const pass = document.getElementById('newPass').value;
+  const bizLine = document.getElementById('newBizLine').value;
+  if (!name || !email || pass.length < 6 || !bizLine) {
+    document.getElementById('newUserError').textContent = 'Preencha todos os campos (senha mínimo 6 caracteres).'; return;
+  }
+  try {
+    const all = await fbGetAll('users');
+    if (all.find(u => u.email === email)) { document.getElementById('newUserError').textContent = 'E-mail já cadastrado.'; return; }
+    const id = 'u' + Date.now();
+    await fbSet('users', id, { id, name, email, password: pass, role: 'trader', businessLine: bizLine, createdAt: new Date().toISOString() });
+    closeModal();
+    toast('Trader cadastrado com sucesso!');
+    renderUsersTab();
+  } catch(e) { toast('Erro ao cadastrar.', true); }
+}
+
+async function deleteUser(id) {
+  if (!confirm('Remover este trader?')) return;
+  try {
+    await fbDelete('users', id);
+    toast('Trader removido.');
+    renderUsersTab();
+  } catch(e) { toast('Erro ao remover.', true); }
+}
+
+function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); }
+
+// ═══════════════════════════════════════════
+// EXPORT
+// ═══════════════════════════════════════════
+function exportExcel() {
+  if (!filteredExpenses.length) { toast('Nenhum dado para exportar.', true); return; }
+  const rows = filteredExpenses.map(e => ({
+    'Trader': e.userName, 'Linha de Negócio': e.businessLine||'',
+    'Evento': e.event, 'Categoria': e.category,
+    'Data': new Date(e.date+'T12:00:00').toLocaleDateString('pt-BR'),
+    'Valor': e.amount, 'Moeda': e.currency,
+    'Descrição': e.description||'',
+    'Status': STATUS_LABEL[e.status],
+    'Data Inclusão': new Date(e.createdAt).toLocaleDateString('pt-BR'),
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Prestações');
+  XLSX.writeFile(wb, `IB_Prestacoes_${new Date().toISOString().slice(0,10)}.xlsx`);
+  toast('Excel exportado!');
+}
+
+function exportPDF() {
+  if (!filteredExpenses.length) { toast('Nenhum dado para exportar.', true); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation:'landscape' });
+  doc.setFillColor(10,10,10);
+  doc.rect(0,0,297,25,'F');
+  doc.setTextColor(245,245,240);
+  doc.setFontSize(18); doc.setFont('helvetica','bold');
+  doc.text('INDEPENDENT BRAZIL', 14, 16);
+  doc.setFontSize(9); doc.setFont('helvetica','normal');
+  doc.setTextColor(150,150,150);
+  doc.text('Relatório de Prestações de Contas · ' + new Date().toLocaleDateString('pt-BR'), 14, 22);
+  const rows = filteredExpenses.map(e => [
+    e.userName, e.businessLine||'', e.event, e.category,
+    new Date(e.date+'T12:00:00').toLocaleDateString('pt-BR'),
+    `${CURR_SYMBOL[e.currency]} ${Number(e.amount).toLocaleString('pt-BR',{minimumFractionDigits:2})}`,
+    STATUS_LABEL[e.status],
+    new Date(e.createdAt).toLocaleDateString('pt-BR'),
+  ]);
+  doc.autoTable({
+    head:[['Trader','Linha','Evento','Categoria','Data','Valor','Status','Inclusão']],
+    body: rows, startY:30,
+    styles:{ fontSize:8, cellPadding:4 },
+    headStyles:{ fillColor:[10,10,10], textColor:[200,168,75], fontStyle:'bold' },
+    alternateRowStyles:{ fillColor:[240,240,235] },
+  });
+  doc.save(`IB_Prestacoes_${new Date().toISOString().slice(0,10)}.pdf`);
+  toast('PDF exportado!');
+}
+
+// ═══════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════
+let toastTimer;
+function toast(msg, isError=false) {
+  const el = document.getElementById('toastEl');
+  el.className = 'toast' + (isError?' error':'');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display='none'; }, 4000);
+}
+</script>
+</body>
+</html>
